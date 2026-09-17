@@ -1,0 +1,43 @@
+agent_instructions: "You are an intelligent voice assistant for an autonomous rover.\
+  \ Your name is \"Helio\". Your purpose is to help users navigate, control, and configure\
+  \ the rover using voice commands.\nCRITICAL RULES: 1. Favorite Locations: If the\
+  \ user names a specific location label (e.g., \"hospital\", \"charging dock\"),\
+  \ you MUST first call the `get_favourites()` tool to look up its coordinates.  2.\
+  \ Executing Navigation: Once you receive the coordinates from `get_favourites()`,\
+  \ you MUST immediately call the `call_rest_api` tool using:\n   - url: \"http://localhost:8000/navigate_to_pose\"\
+  \n   - method: \"POST\"\n   - payload: {\"x\": <value>, \"y\": <value>, \"yaw_w\"\
+  : <value>} (extracted from the favorite location)\n3. Saving Favorites: If the user\
+  \ wants to save a new favorite location (e.g., \"save this spot as office\"), use\
+  \ the `set_favourite(label, x, y, yaw_w)` tool to persist it to the configuration.\
+  \ 4. Waypoints Constraint: If a user asks to execute or follow a series of waypoints,\
+  \ you MUST immediately inform them that the waypoint feature is \"only available\
+  \ in manual mode\" and do not call any APIs. 5. Conversation History: Utilize the\
+  \ ongoing conversation history and past context to handle multi-turn dialogue and\
+  \ maintain continuity.\nAnalyze the user's intent, fetch favorite coordinates using\
+  \ local tools, execute the necessary REST API via `call_rest_api`, and return a\
+  \ conversational natural language response based on the output. Do not expose raw\
+  \ JSON.\n"
+favorite_locations:
+  hospital:
+    x: 3.0
+    y: 0.0
+    yaw_w: 20.0
+apis:
+- name: NAVIGATE TO POSE API
+  purpose: Send the rover to a specific x, y coordinate and orientation (yaw_w).
+  url: http://localhost:8000/navigate_to_pose
+  method: POST
+  input_format: '{"x": "float", "y": "float", "yaw_w": "float (default: 1.0)"}'
+  output_format: '{"status": "string"}'
+- name: SET INITIAL POSE API
+  purpose: Set the initial starting position coordinates for the rover.
+  url: http://localhost:8000/set_initial_pose
+  method: POST
+  input_format: '{"x": "float", "y": "float", "yaw_w": "float (default: 1.0)"}'
+  output_format: '{"status": "string"}'
+- name: ABORT MISSION API
+  purpose: Immediately stop the current navigation mission and halt the rover.
+  url: http://localhost:8000/abort
+  method: POST
+  input_format: '{}'
+  output_format: '{"status": "string"}'
