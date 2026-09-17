@@ -1,4 +1,4 @@
 
-cd ~/waregv_agentic
+cd ~/waregv_helio
 
 python3 main.py
