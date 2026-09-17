@@ -4,8 +4,8 @@ import yaml
 import requests
 from typing import Optional, Dict, Any
 
-CONFIG_PATH = "config.yaml"
-LOG_PATH = "tools.log"
+CONFIG_PATH = "configs/config.yaml"
+LOG_PATH = "log/tools.log"
 
 # Create a dedicated, isolated logger for your tools
 logger = logging.getLogger("RoverTools")

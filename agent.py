@@ -14,7 +14,7 @@ client = OpenAI(
 # 2. Function to load and build the system prompt from config.yaml
 def build_system_prompt() -> str:
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(current_dir, "config.yaml")
+    config_path = os.path.join(current_dir,"configs", "config.yaml")
     
     with open(config_path, "r") as file:
         config = yaml.safe_load(file)
