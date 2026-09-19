@@ -1,0 +1,9 @@
+checkpoints:
+  hospital:
+    x: 3.0
+    y: 0.0
+    yaw_degree: 20.0
+  storage:
+    x: 0.0
+    y: -4.0
+    yaw_degree: 40.0
