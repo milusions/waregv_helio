@@ -47,6 +47,20 @@ apis:
     method: POST
     input_format: '{}'
     output_format: '{"status":"string"}'
+    
+  - name: SET MOTOR SPEED
+    purpose: Directly control the left and right motor speeds.
+    url: /motor/speed
+    method: POST
+    input_format: '{"left_speed":"float","right_speed":"float"}'
+    output_format: '{"status":"string"}'
+
+  - name: GET ENCODER READING
+    purpose: Retrieve the current raw encoder ticks or readings from the motors.
+    url: /telemetry/encoders
+    method: GET
+    input_format: '{}'
+    output_format: '{"left_ticks":"int","right_ticks":"int"}'
 
 tool_description:
   - type: function
@@ -245,4 +259,21 @@ tool_description:
     function:
       name: get_slam_update_status
       description: Report SLAM Toolbox/map continuation state.
+      parameters: {type: object, properties: {}}
+      
+  - type: function
+    function:
+      name: set_motor_speed
+      description: Set the speed of the left and right motors directly. Use for low-level motor control.
+      parameters:
+        type: object
+        properties:
+          left_speed: {type: number}
+          right_speed: {type: number}
+        required: [left_speed, right_speed]
+
+  - type: function
+    function:
+      name: get_encoder_reading
+      description: Retrieve the current encoder readings or ticks for the motors.
       parameters: {type: object, properties: {}}

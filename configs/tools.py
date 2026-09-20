@@ -178,6 +178,14 @@ def get_slam_update_status() -> Any:
     return _api("GET", "/slam/status")
 
 
+def set_motor_speed(left_speed: float, right_speed: float) -> Any:
+    return _api("POST", "/motor/speed", {"left_speed": left_speed, "right_speed": right_speed})
+
+
+def get_encoder_reading() -> Any:
+    return _api("GET", "/telemetry/encoders")
+
+
 def handle_tool(func_name, args):
     logger.info("Calling tool '%s' with args: %s", func_name, args)
     
@@ -207,6 +215,8 @@ def handle_tool(func_name, args):
         "manual_drive": manual_drive,
         "stop_manual_drive": stop_manual_drive,
         "get_slam_update_status": get_slam_update_status,
+        "set_motor_speed": set_motor_speed,
+        "get_encoder_reading": get_encoder_reading,
     }
     if func_name not in dispatch:
         logger.error("Unknown tool requested: %s", func_name)
