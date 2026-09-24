@@ -3,76 +3,86 @@ rest_base_url: "http://localhost:8000"
 agent_instructions: |
   You are Helio, an intelligent voice assistant for an autonomous rover.
 
-  NAVIGATION:
-  1. If the user names a saved checkpoint/favorite location, ALWAYS call get_checkpoints first.
-  2. After finding the checkpoint, call navigate_to_pose or navigate_to_checkpoint.
-  3. Use yaw_deg for human-facing orientation in degrees.
-  4. If the user asks for waypoints, waypoint execution is supported only when the rover is in manual mode according to the existing rover UI workflow. Do not silently change modes.
+  CHECKPOINTS & LOCATIONS:
+  1. When the user asks to remember a location (e.g., "remember that this is the kitchen"), call get_robot_pose first, then use set_checkpoint with the coordinates.
+  2. When the user asks to navigate to a saved location, call navigate_to_checkpoint with the label name.
 
-  SAFETY:
-  5. Before manual driving, verify the rover is in manual mode with get_system_mode.
-  6. Abort/stop immediately when the user asks to stop, abort, halt, or emergency stop.
-  7. Do not claim that a mission succeeded just because an API returned "dispatched". Check get_navigation_status when confirmation is needed.
-  8. For current state questions, prefer read-only tools such as get_rover_status, get_robot_pose, get_odom and get_navigation_status.
-  9. Do not expose raw JSON unless explicitly requested. Respond conversationally.
+  ONLINE LEARNING & SKILLS:
+  3. Whenever a user asks you to execute a specific errand, routine, or task, ALWAYS check available skills first using get_learned_skills.
+  4. If you know the skill, follow its stored steps or execute the actions accordingly.
+  5. If you DO NOT know how to run the requested errand:
+     - Inform the user clearly: "I do not know how to run that errand yet."
+     - Ask the user to teach you step-by-step how it should be done.
+     - Leverage the conversation history to track all details the user provides.
+     - Once you have gathered enough instructions and understand the sequence of actions, repeat back the summary of how to run the errand to the user.
+     - Ask the user for explicit confirmation to save this errand.
+     - Upon confirmation, call save_learned_skill with a descriptive name, description, and list of steps, so you can perform it automatically next time.
 
-  MAP / SLAM:
-  10. load_map loads an existing occupancy map.
-  11. save_map saves the occupancy map and, when SLAM Toolbox is active, serializes data for future continued mapping.
-  12. start_slam_update is for continuing mapping from a serialized SLAM Toolbox map.
-  13. Use get_slam_update_status to report mapping state.
-
-  CHECKPOINTS:
-  14. set_checkpoint saves a named location using x, y and yaw_deg.
-  15. Never invent checkpoint coordinates.
+  NAVIGATION & SYSTEM:
+  6. Use navigate_to_pose, set_initial_pose, set_system_mode, get_system_mode, abort_mission, and save_map when appropriate.
+  7. Respond conversationally and do not expose raw JSON unless explicitly requested.
 
 apis:
-  - name: NAVIGATE TO POSE
-    purpose: Send rover to x/y with orientation in degrees.
-    url: /navigate_to_pose
+  - name: SET SYSTEM MODE
+    purpose: Sets the rover's operating mode and the active map environment.
+    url: /system/mode
     method: POST
-    input_format: '{"x":"float","y":"float","yaw_deg":"float"}'
-    output_format: '{"status":"string"}'
+    input_format: '{"mode": "string", "map_name": "string"}'
+    output_format: '{"ok": boolean}'
+
+  - name: GET SYSTEM MODE
+    purpose: Retrieves the currently active operating mode.
+    url: /system/mode
+    method: GET
+    input_format: '{}'
+    output_format: '{"mode": "string"}'
 
   - name: SET INITIAL POSE
-    purpose: Set rover localization initial pose.
+    purpose: Sets the initial localization coordinates and heading of the rover on the SLAM map.
     url: /set_initial_pose
     method: POST
-    input_format: '{"x":"float","y":"float","yaw_deg":"float"}'
-    output_format: '{"status":"string"}'
+    input_format: '{"x": float, "y": float, "yaw_deg": float}'
+    output_format: '{"ok": boolean}'
+
+  - name: NAVIGATE TO POSE
+    purpose: Commands the rover to navigate to a single specific target location.
+    url: /navigate_to_pose
+    method: POST
+    input_format: '{"x": float, "y": float, "yaw_deg": float}'
+    output_format: '{"ok": boolean}'
+
+  - name: FOLLOW WAYPOINTS
+    purpose: Commands the rover to follow a sequential array of target coordinates.
+    url: /follow_waypoints
+    method: POST
+    input_format: '{"waypoints": [{"x": float, "y": float, "yaw_deg": float}, ...]}'
+    output_format: '{"ok": boolean}'
 
   - name: ABORT MISSION
-    purpose: Cancel current Nav2 task.
+    purpose: Immediately aborts the current navigation mission and stops the rover.
     url: /abort
     method: POST
     input_format: '{}'
-    output_format: '{"status":"string"}'
-    
-  - name: SET MOTOR SPEED
-    purpose: Directly control the left and right motor speeds.
-    url: /motor/speed
-    method: POST
-    input_format: '{"left_speed":"float","right_speed":"float"}'
-    output_format: '{"status":"string"}'
+    output_format: '{"ok": boolean}'
 
-  - name: GET ENCODER READING
-    purpose: Retrieve the current raw encoder ticks or readings from the motors.
-    url: /telemetry/encoders
+  - name: SAVE MAP
+    purpose: Triggers a download of the current SLAM map.
+    url: /map/save
     method: GET
-    input_format: '{}'
-    output_format: '{"left_ticks":"int","right_ticks":"int"}'
+    input_format: '?name=string'
+    output_format: 'application/zip binary stream'
 
 tool_description:
   - type: function
     function:
       name: get_checkpoints
-      description: Retrieve all saved favorite/checkpoint locations.
+      description: Retrieve all saved checkpoint locations from checkpoints.yaml.
       parameters: {type: object, properties: {}}
 
   - type: function
     function:
       name: set_checkpoint
-      description: Save or update a named checkpoint.
+      description: Save or update a named checkpoint location using coordinates from robot pose.
       parameters:
         type: object
         properties:
@@ -84,20 +94,8 @@ tool_description:
 
   - type: function
     function:
-      name: navigate_to_pose
-      description: Navigate to a map coordinate with yaw in degrees.
-      parameters:
-        type: object
-        properties:
-          x: {type: number}
-          y: {type: number}
-          yaw_deg: {type: number}
-        required: [x, y]
-
-  - type: function
-    function:
       name: navigate_to_checkpoint
-      description: Navigate to a saved checkpoint by label.
+      description: Retrieve a location from checkpoints.yaml by label and send navigate_to_pose command.
       parameters:
         type: object
         properties:
@@ -106,8 +104,45 @@ tool_description:
 
   - type: function
     function:
+      name: get_learned_skills
+      description: Retrieve all dynamically learned user skills and routines from learning.yaml.
+      parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: save_learned_skill
+      description: Save a newly taught user errand/skill into learning.yaml with its steps and description.
+      parameters:
+        type: object
+        properties:
+          skill_name: {type: string}
+          description: {type: string}
+          steps:
+            type: array
+            items: {type: string}
+        required: [skill_name, description, steps]
+
+  - type: function
+    function:
+      name: get_system_mode
+      description: Retrieves the currently active operating mode.
+      parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: set_system_mode
+      description: Sets the rover's operating mode and the active map environment.
+      parameters:
+        type: object
+        properties:
+          mode: {type: string}
+          map_name: {type: string}
+        required: [mode, map_name]
+
+  - type: function
+    function:
       name: set_initial_pose
-      description: Set the rover's initial localization pose.
+      description: Sets the initial localization coordinates and heading of the rover on the SLAM map.
       parameters:
         type: object
         properties:
@@ -118,58 +153,20 @@ tool_description:
 
   - type: function
     function:
-      name: abort_mission
-      description: Immediately cancel the current navigation task.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_system_mode
-      description: Get current rover mode and switching state.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: set_system_mode
-      description: Switch rover between slam, nav, slam_nav, slam_update and manual.
+      name: navigate_to_pose
+      description: Commands the rover to navigate to a single specific target location.
       parameters:
         type: object
         properties:
-          mode: {type: string, enum: [slam, nav, slam_nav, slam_update, manual]}
-          map_name: {type: string}
-        required: [mode]
-
-  - type: function
-    function:
-      name: load_map
-      description: Load an existing occupancy map without relaunching Nav2.
-      parameters:
-        type: object
-        properties: {map_name: {type: string}}
-        required: [map_name]
-
-  - type: function
-    function:
-      name: save_map
-      description: Save occupancy map and SLAM Toolbox continuation data when available.
-      parameters:
-        type: object
-        properties: {map_name: {type: string}}
-        required: [map_name]
-
-  - type: function
-    function:
-      name: start_slam_update
-      description: Continue mapping from a serialized SLAM Toolbox pose graph.
-      parameters:
-        type: object
-        properties: {map_name: {type: string}}
-        required: [map_name]
+          x: {type: number}
+          y: {type: number}
+          yaw_deg: {type: number}
+        required: [x, y]
 
   - type: function
     function:
       name: follow_waypoints
-      description: Execute a sequence of map waypoints.
+      description: Commands the rover to follow a sequential array of target coordinates.
       parameters:
         type: object
         properties:
@@ -186,94 +183,21 @@ tool_description:
 
   - type: function
     function:
+      name: abort_mission
+      description: Immediately aborts the current navigation mission and stops the rover.
+      parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: save_map
+      description: Triggers a download of current SLAM map packaged into a .zip.
+      parameters:
+        type: object
+        properties:
+          name: {type: string}
+
+  - type: function
+    function:
       name: get_robot_pose
-      description: Get current map-frame x, y and yaw.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_navigation_status
-      description: Get current navigation mission status and distance/ETA if available.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_distance_to_goal
-      description: Get current remaining navigation distance.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_map_info
-      description: Get current occupancy grid map metadata.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_navigation_plan
-      description: Get the current Nav2 planned path.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_odom
-      description: Get current odometry position, orientation and velocity.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_wheel_states
-      description: Get latest joint/wheel state information.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_rover_status
-      description: Get a combined high-level rover state.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_available_maps
-      description: List maps available to the rover.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: manual_drive
-      description: Drive manually using linear and angular velocity. Use only in manual mode.
-      parameters:
-        type: object
-        properties:
-          linear: {type: number}
-          angular: {type: number}
-        required: [linear, angular]
-
-  - type: function
-    function:
-      name: stop_manual_drive
-      description: Send zero velocity to stop manual driving.
-      parameters: {type: object, properties: {}}
-
-  - type: function
-    function:
-      name: get_slam_update_status
-      description: Report SLAM Toolbox/map continuation state.
-      parameters: {type: object, properties: {}}
-      
-  - type: function
-    function:
-      name: set_motor_speed
-      description: Set the speed of the left and right motors directly. Use for low-level motor control.
-      parameters:
-        type: object
-        properties:
-          left_speed: {type: number}
-          right_speed: {type: number}
-        required: [left_speed, right_speed]
-
-  - type: function
-    function:
-      name: get_encoder_reading
-      description: Retrieve the current encoder readings or ticks for the motors.
+      description: Retrieve the rover's current physical position and heading.
       parameters: {type: object, properties: {}}

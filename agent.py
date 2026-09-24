@@ -1,12 +1,9 @@
 import os
-import json
 import yaml
 import logging
 from datetime import datetime
 from typing import Optional, Dict, List
 from openai import OpenAI
-from configs.tools import handle_tool
-import uuid
 
 
 # Setup agent logger
@@ -29,32 +26,12 @@ client = OpenAI(
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
 
-config_data = None
 current_dir = os.path.dirname(os.path.abspath(__file__))
 config_path = os.path.join(current_dir, "configs", "config.yaml")
 with open(config_path, "r") as file:
     config_data = yaml.safe_load(file)
 
-
-def build_system_prompt() -> str:
-    global config_data
-
-    prompt = config_data.get("agent_instructions", "") + "\n\nHere are the APIs available to you:\n"
-    
-    for i, api in enumerate(config_data.get("apis", [])):
-        prompt += f"{i+1}. {api['name']}:\n"
-        prompt += f"   - Purpose: {api['purpose']}\n"
-        prompt += f"   - URL: {api['url']}\n"
-        prompt += f"   - Method: {api['method']}\n"
-        prompt += f"   - Input format (payload): {api['input_format']}\n"
-        prompt += f"   - Output format: {api['output_format']}\n\n"
-        
-    return prompt
-
-
-SYSTEM_PROMPT = build_system_prompt()
-tools = config_data.get("tool_description", "")
-
+SYSTEM_PROMPT = config_data.get("agent_instructions", "You are Helio.")
 sessions: Dict[str, List[dict]] = {}
 
 
@@ -79,67 +56,22 @@ def process_agent_request(user_message: str, conversation_id: str, event_callbac
     history.append({"role": "user", "content": user_message})
     _emit(event_callback, "status", stage="thinking", message="Helio is processing the request.")
 
-    while True:
-        response = client.chat.completions.create(
-            model="gemini-2.5-flash",
-            messages=history,
-            tools=tools,
-            temperature=0.0,
-        )
-        response_message = response.choices[0].message
-        model_text = response_message.content or ""
+    response = client.chat.completions.create(
+        model="gemini-2.5-flash",
+        messages=history,
+        temperature=0.0,
+    )
+    
+    response_message = response.choices[0].message
+    final_content = response_message.content or "I have processed your request, but no text response was returned."
+    
+    logger.info("[%s] Model output: %s", conversation_id, final_content)
+    _emit(event_callback, "model", stage="model", message=final_content)
 
-        if model_text:
-            logger.info("[%s] Model output: %s", conversation_id, model_text)
-            _emit(event_callback, "model", stage="model", message=model_text)
+    # Append assistant response to preserve conversation history
+    history.append({"role": "assistant", "content": final_content})
 
-        if not response_message.tool_calls:
-            history.append(response_message)
-            final_content = response_message.content or "I have processed your request, but no text response was returned."
-            logger.info("[%s] Final Response Sent to User: %s", conversation_id, final_content)
-            _emit(event_callback, "status", stage="complete", message="Response ready.")
-            return final_content
-
-        history.append(response_message)
-
-        for tool_call in response_message.tool_calls:
-            func_name = tool_call.function.name
-            try:
-                args = json.loads(tool_call.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-
-            logger.info("[%s] Tool Call Triggered -> Function: %s | Inputs: %s", conversation_id, func_name, args)
-            _emit(event_callback, "tool_call", stage="tool_call", tool=func_name, inputs=args, message=f"Calling {func_name}")
-            _emit(event_callback, "status", stage="tool_running", message=f"Running {func_name}...")
-
-            try:
-                tool_result = handle_tool(func_name, args)
-                tool_error = False
-            except Exception as exc:
-                tool_result = {"error": str(exc)}
-                tool_error = True
-                logger.exception("[%s] Tool failed: %s", conversation_id, func_name)
-
-            result_text = str(tool_result)
-            logger.info("[%s] Tool Result <- Function: %s | Result: %s", conversation_id, func_name, result_text)
-            _emit(
-                event_callback,
-                "tool_result",
-                stage="tool_result",
-                tool=func_name,
-                result=tool_result,
-                success=not tool_error,
-                message=f"{func_name} returned a result.",
-            )
-
-            # This internal tool_call_id is required by the model API. It is
-            # not the browser's call/session identifier and is never surfaced.
-            history.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": func_name,
-                "content": result_text,
-            })
-
-        _emit(event_callback, "status", stage="thinking", message="Helio is evaluating the tool result.")
+    logger.info("[%s] Final Response Sent to User: %s", conversation_id, final_content)
+    _emit(event_callback, "status", stage="complete", message="Response ready.")
+    
+    return final_content
