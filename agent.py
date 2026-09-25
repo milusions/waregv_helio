@@ -6,6 +6,12 @@ import sys
 import json
 from datetime import datetime
 from typing import Optional, Dict, List
+
+# --- Patch missing aiohttp attribute before importing openai ---
+import aiohttp
+if not hasattr(aiohttp, "SocketTimeoutError"):
+    aiohttp.SocketTimeoutError = getattr(aiohttp, "ServerTimeoutError", asyncio.TimeoutError if "asyncio" in sys.modules else Exception)
+
 from openai import OpenAI
 from configs.tools import handle_tool
 
