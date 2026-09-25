@@ -98,4 +98,4 @@ async def helio_websocket(websocket: WebSocket):
 if __name__ == "__main__":
     # Force the 'websockets' implementation and bind to 127.0.0.1 
     # to avoid IPv6/localhost resolving issues in the browser.
-    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=False, ws="websockets")
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False, ws="websockets")
