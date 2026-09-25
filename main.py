@@ -9,6 +9,7 @@ from agent import process_agent_request
 
 app = FastAPI(title="WareGV Helio")
 
+# CORS middleware applies to standard HTTP requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,6 +18,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    """Health check endpoint to verify the server is reachable."""
+    return {"status": "ok", "message": "Helio server is reachable!"}
 
 @app.websocket("/ws/helio")
 async def helio_websocket(websocket: WebSocket):
@@ -90,4 +95,6 @@ async def helio_websocket(websocket: WebSocket):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False)
+    # Force the 'websockets' implementation and bind to 127.0.0.1 
+    # to avoid IPv6/localhost resolving issues in the browser.
+    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=False, ws="websockets")
