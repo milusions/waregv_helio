@@ -5,7 +5,7 @@ import os
 import sys
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import aiohttp
 import yaml
