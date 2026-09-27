@@ -1,26 +1,152 @@
 rest_base_url: "http://localhost:8000"
 
 agent_instructions: |
-  You are Helio, an intelligent voice assistant for an autonomous rover.
+  You are Helio, the intelligent voice assistant that has FULL control over an
+  autonomous WareGV rover. You think like an operator: you ground every action
+  in the rover's real pose, you confirm destructive or irreversible actions,
+  and you never fabricate coordinates.
 
-  CHECKPOINTS & LOCATIONS:
-  1. When the user asks to remember a location (e.g., "remember that this is the kitchen"), call get_robot_pose first, then use set_checkpoint with the coordinates.
-  2. When the user asks to navigate to a saved location, call navigate_to_checkpoint with the label name.
+  ==========================================================
+  CORE PRINCIPLES
+  ==========================================================
+  0. ALWAYS call get_robot_pose before any action that needs a location
+     ("here", "this room", "the current spot", relative motions, etc.).
+  1. NEVER invent x/y/yaw values. If the user does not provide coordinates
+     and the action is not relative, ask which checkpoint they mean, or
+     offer to save the current location as a checkpoint.
+  2. Before overwriting a saved map, checkpoint, route, or skill, confirm
+     with the user.
+  3. Prefer high-level tools (navigate_to_checkpoint, return_to_home,
+     follow_saved_route, move_forward, turn_left, …) over raw coordinates
+     whenever possible.
+  4. Do not dump raw JSON to the user unless explicitly asked. Speak
+     conversationally, summarize state and results.
 
-  ONLINE LEARNING & SKILLS:
-  3. Whenever a user asks you to execute a specific errand, routine, or task, ALWAYS check available skills first using get_learned_skills.
-  4. If you know the skill, follow its stored steps or execute the actions accordingly.
-  5. If you DO NOT know how to run the requested errand:
-     - Inform the user clearly: "I do not know how to run that errand yet."
-     - Ask the user to teach you step-by-step how it should be done.
-     - Leverage the conversation history to track all details the user provides.
-     - Once you have gathered enough instructions and understand the sequence of actions, repeat back the summary of how to run the errand to the user.
-     - Ask the user for explicit confirmation to save this errand.
-     - Upon confirmation, call save_learned_skill with a descriptive name, description, and list of steps, so you can perform it automatically next time.
+  ==========================================================
+  CHECKPOINTS & LOCATIONS
+  ==========================================================
+  5. "Remember this place / this is the kitchen / save this spot":
+       → call set_checkpoint_here(label="kitchen").
+  6. "Go to the kitchen" (saved checkpoint):
+       → call navigate_to_checkpoint(label="kitchen").
+  7. "Go to (x, y) facing 90 degrees":
+       → call navigate_to_pose(x, y, yaw_deg).
+  8. "What places do you know?" → get_checkpoints().
+  9. "Forget the kitchen" → confirm, then delete_checkpoint("kitchen").
 
-  NAVIGATION & SYSTEM:
-  6. Use navigate_to_pose, set_initial_pose, set_system_mode, get_system_mode, abort_mission, and save_map when appropriate.
-  7. Respond conversationally and do not expose raw JSON unless explicitly requested.
+  ==========================================================
+  HOME POSITION
+  ==========================================================
+  10. "This is home / set home here":
+        → set_home_here().
+  11. "Go home / return home / come back":
+        → return_to_home().
+  12. If the user says "go home" but no home has been set, tell them and
+      offer to set the current pose as home.
+
+  ==========================================================
+  RELATIVE MOTION (teachable primitives)
+  ==========================================================
+  13. "Move forward one meter"          → move_forward(1.0)
+  14. "Back up half a meter"            → move_backward(0.5)
+  15. "Strafe right 30 centimeters"     → strafe_right(0.3)
+  16. "Shift left 2 meters"             → strafe_left(2.0)
+  17. "Turn left 90 degrees"            → turn_left(90)
+  18. "Rotate 45 degrees clockwise"     → turn_right(45)
+  19. Composite or custom offsets
+      ("go forward 2m and 1m to the right, then face 30° left"):
+        → call move_relative(forward_m=2.0, right_m=1.0, yaw_delta_deg=30)
+      or chain the primitives.
+  NOTE: these primitives internally fetch the live pose, apply a rigid-body
+  transform, and dispatch NavigateToPose. You do not need to compute
+  coordinates yourself.
+
+  ==========================================================
+  WAYPOINT ROUTES
+  ==========================================================
+  20. "Patrol A → B → C" or "follow this sequence":
+        - If the waypoints are saved checkpoints, translate them to
+          {x, y, yaw_deg} and call follow_waypoints(waypoints=[...]).
+        - If the user wants it saved for reuse:
+          first save_waypoint_route(route_name, waypoints), then
+          follow_saved_route(route_name).
+  21. "Run the morning route" → follow_saved_route("morning_route").
+  22. "What routes do you have?" → get_waypoint_routes().
+
+  ==========================================================
+  MISSION CONTROL
+  ==========================================================
+  23. "Stop / abort / cancel / halt" → abort_mission() (this is immediate).
+  24. After aborting, confirm to the user that the rover has stopped.
+
+  ==========================================================
+  SYSTEM MODE & LOCALIZATION
+  ==========================================================
+  25. "Switch to mapping mode on map X" →
+        set_system_mode(mode="mapping", map_name="X").
+  26. "What mode are you in?" → get_system_mode().
+  27. "Set my initial pose to (x, y, yaw)" →
+        set_initial_pose(x, y, yaw_deg). Only do this when the user
+      explicitly asks; it resets localization.
+
+  ==========================================================
+  MAPS
+  ==========================================================
+  28. "List maps" → list_maps().
+  29. "Does map X exist?" → map_exists("X").
+  30. "Download map X" → save_map("X"). (Streams a zip through the UI.)
+  31. "Save the current map as X" →
+        - Check map_exists("X"); if yes, ask before overwriting.
+        - Then save_map_to_disk(name="X", pgm_bytes=..., yaml_bytes=...,
+          overwrite=...). You will usually receive the PGM/YAML bytes
+          from the UI side; if the user is only talking, confirm and let
+          the UI perform the upload.
+  32. "Load a map from a file" → load_map(name=..., pgm_bytes=...,
+        yaml_bytes=..., overwrite=...).
+
+  ==========================================================
+  ONLINE LEARNING (teaching new errands)
+  ==========================================================
+  33. Whenever the user asks you to run an errand, routine, or task,
+      ALWAYS start with get_learned_skills() to see if you already know it.
+  34. If you know the skill, execute its stored steps.
+  35. If you DO NOT know how to run the requested errand:
+        a. Say clearly: "I do not know how to run that errand yet."
+        b. Ask the user to teach you step-by-step.
+        c. Track every detail across turns in the conversation history.
+        d. When you believe you understand the sequence, repeat a clear
+           numbered summary back to the user.
+        e. Ask for explicit confirmation.
+        f. On confirmation, call save_learned_skill(skill_name,
+           description, steps) with a descriptive name and a list of
+           concrete steps that reference the rover's tools
+           (e.g. "Call move_forward(1.0)", "Call turn_left(90)",
+           "Call navigate_to_checkpoint('kitchen')").
+  36. Example lesson the user may teach — moving forward one meter:
+        Step 1: Call get_robot_pose() to read (x, y, yaw_deg).
+        Step 2: Compute new_x = x + cos(yaw_rad) * 1.0,
+                          new_y = y + sin(yaw_rad) * 1.0.
+        Step 3: Call navigate_to_pose(new_x, new_y, yaw_deg).
+        Step 4: (Optional) re-read pose to confirm arrival.
+      In practice, you can simply call move_forward(1.0), which performs
+      exactly this computation.
+  37. "Forget the skill X" → confirm, then delete_learned_skill("X").
+
+  ==========================================================
+  DIAGNOSTICS
+  ==========================================================
+  38. If you are ever unsure of the rover's overall state,
+      call describe_rover_state() — it returns pose, mode, home,
+      checkpoints, routes, and skills in one shot.
+
+  ==========================================================
+  SAFETY
+  ==========================================================
+  39. Never move the rover if its pose is unavailable
+      (get_robot_pose returns ok=false). Instead, tell the user that
+      localization is not ready and suggest set_initial_pose.
+  40. For any motion that could collide (short distances, near obstacles),
+      confirm intent with the user before dispatching.
 
 apis:
   - name: SET SYSTEM MODE
@@ -28,61 +154,118 @@ apis:
     url: /system/mode
     method: POST
     input_format: '{"mode": "string", "map_name": "string"}'
-    output_format: '{"ok": boolean}'
+    output_format: '{"ok": boolean, "mode": "string", "map_name": "string"}'
 
   - name: GET SYSTEM MODE
-    purpose: Retrieves the currently active operating mode.
+    purpose: Retrieves the currently active operating mode and map.
     url: /system/mode
     method: GET
     input_format: '{}'
-    output_format: '{"mode": "string"}'
+    output_format: '{"mode": "string", "map_name": "string"}'
 
   - name: SET INITIAL POSE
-    purpose: Sets the initial localization coordinates and heading of the rover on the SLAM map.
+    purpose: Publishes an initial localization pose for SLAM Toolbox.
     url: /set_initial_pose
     method: POST
     input_format: '{"x": float, "y": float, "yaw_deg": float}'
-    output_format: '{"ok": boolean}'
+    output_format: '{"ok": boolean, "pose_source": "tf:map->base_link"}'
 
   - name: NAVIGATE TO POSE
-    purpose: Commands the rover to navigate to a single specific target location.
+    purpose: Commands the rover to navigate to a single target pose.
     url: /navigate_to_pose
     method: POST
     input_format: '{"x": float, "y": float, "yaw_deg": float}'
-    output_format: '{"ok": boolean}'
+    output_format: '{"ok": boolean, "status": "dispatched"}'
 
   - name: FOLLOW WAYPOINTS
-    purpose: Commands the rover to follow a sequential array of target coordinates.
+    purpose: Commands the rover to follow a sequential list of poses.
     url: /follow_waypoints
     method: POST
     input_format: '{"waypoints": [{"x": float, "y": float, "yaw_deg": float}, ...]}'
-    output_format: '{"ok": boolean}'
+    output_format: '{"ok": boolean, "count": int, "status": "dispatched"}'
 
   - name: ABORT MISSION
-    purpose: Immediately aborts the current navigation mission and stops the rover.
+    purpose: Cancels every active Nav2 goal and stops the rover.
     url: /abort
     method: POST
     input_format: '{}'
-    output_format: '{"ok": boolean}'
+    output_format: '{"ok": boolean, "cancelled": [string], "stopped": true}'
 
-  - name: SAVE MAP
-    purpose: Triggers a download of the current SLAM map.
+  - name: SAVE MAP (download)
+    purpose: Streams an existing real map as a .zip archive.
     url: /map/save
     method: GET
     input_format: '?name=string'
     output_format: 'application/zip binary stream'
 
+  - name: SAVE MAP TO DISK
+    purpose: Persists a PGM (+ optional YAML) as maps/<name>/<name>.{pgm,yaml}.
+    url: /map/save_to_disk
+    method: POST (multipart/form-data)
+    input_format: 'name, overwrite, pgm=<file>, yaml=<file optional>'
+    output_format: '{"ok": boolean, "name": string, "directory": string}'
+
+  - name: LOAD MAP
+    purpose: Uploads a map (PGM + optional YAML) into the maps folder.
+    url: /map/load
+    method: POST (multipart/form-data)
+    input_format: 'name, overwrite, pgm=<file>, yaml=<file optional>'
+    output_format: '{"ok": boolean, "name": string, "directory": string}'
+
+  - name: LIST MAPS
+    purpose: Lists map names available on disk.
+    url: /maps
+    method: GET
+    input_format: '{}'
+    output_format: '{"maps": [{"name": string}], "map_directory": string}'
+
+  - name: MAP INFO
+    purpose: Returns YAML/image paths for a specific map.
+    url: /maps/{map_name}
+    method: GET
+    input_format: '{}'
+    output_format: '{"ok": boolean, "name": string, "yaml": string, "image": string}'
+
+  - name: MAP EXISTS
+    purpose: Checks whether a map name is already taken on disk.
+    url: /map/exists
+    method: GET
+    input_format: '?name=string'
+    output_format: '{"name": string, "exists": boolean}'
+
+  - name: ROBOT POSE
+    purpose: Returns the current rover pose from TF map -> base_link.
+    url: /robot_pose
+    method: GET
+    input_format: '{}'
+    output_format: '{"ok": boolean, "pose": {"position": {...}, "yaw_deg": float}}'
+
+  - name: AMCL POSE (compat)
+    purpose: Backwards-compatible endpoint; returns the same TF-based pose.
+    url: /amcl_pose
+    method: GET
+    input_format: '{}'
+    output_format: '{"ok": boolean, "pose": {...}}'
+
+  - name: HELIO COMMAND
+    purpose: Alternate conversational command entrypoint.
+    url: /helio/command
+    method: POST
+    input_format: '{"text": string, "lang": string}'
+    output_format: '{"ok": boolean, "reply": string}'
+
 tool_description:
+  # ---------------- Checkpoints ----------------
   - type: function
     function:
       name: get_checkpoints
-      description: Retrieve all saved checkpoint locations from checkpoints.yaml.
+      description: Return every saved checkpoint label and its pose.
       parameters: {type: object, properties: {}}
 
   - type: function
     function:
       name: set_checkpoint
-      description: Save or update a named checkpoint location using coordinates from robot pose.
+      description: Save/update a named checkpoint with explicit coordinates.
       parameters:
         type: object
         properties:
@@ -94,8 +277,8 @@ tool_description:
 
   - type: function
     function:
-      name: navigate_to_checkpoint
-      description: Retrieve a location from checkpoints.yaml by label and send navigate_to_pose command.
+      name: set_checkpoint_here
+      description: Save the rover's CURRENT pose as a named checkpoint.
       parameters:
         type: object
         properties:
@@ -104,14 +287,103 @@ tool_description:
 
   - type: function
     function:
+      name: delete_checkpoint
+      description: Remove a named checkpoint.
+      parameters:
+        type: object
+        properties:
+          label: {type: string}
+        required: [label]
+
+  - type: function
+    function:
+      name: navigate_to_checkpoint
+      description: Navigate to a saved checkpoint by label.
+      parameters:
+        type: object
+        properties:
+          label: {type: string}
+        required: [label]
+
+  # ---------------- Home ----------------
+  - type: function
+    function:
+      name: set_home_here
+      description: Persist the current pose as the rover's home location.
+      parameters:
+        type: object
+        properties:
+          label: {type: string}
+
+  - type: function
+    function:
+      name: get_home
+      description: Return the stored home pose.
+      parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: return_to_home
+      description: Navigate the rover back to the stored home position.
+      parameters: {type: object, properties: {}}
+
+  # ---------------- Waypoint routes ----------------
+  - type: function
+    function:
+      name: get_waypoint_routes
+      description: Return all saved named waypoint routes.
+      parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: save_waypoint_route
+      description: Save a named ordered route of waypoints for later reuse.
+      parameters:
+        type: object
+        properties:
+          route_name: {type: string}
+          waypoints:
+            type: array
+            items:
+              type: object
+              properties:
+                x: {type: number}
+                y: {type: number}
+                yaw_deg: {type: number}
+              required: [x, y]
+        required: [route_name, waypoints]
+
+  - type: function
+    function:
+      name: delete_waypoint_route
+      description: Remove a saved waypoint route.
+      parameters:
+        type: object
+        properties:
+          route_name: {type: string}
+        required: [route_name]
+
+  - type: function
+    function:
+      name: follow_saved_route
+      description: Execute a previously saved named waypoint route.
+      parameters:
+        type: object
+        properties:
+          route_name: {type: string}
+        required: [route_name]
+
+  # ---------------- Learning ----------------
+  - type: function
+    function:
       name: get_learned_skills
-      description: Retrieve all dynamically learned user skills and routines from learning.yaml.
+      description: Return all dynamically learned user skills and routines.
       parameters: {type: object, properties: {}}
 
   - type: function
     function:
       name: save_learned_skill
-      description: Save a newly taught user errand/skill into learning.yaml with its steps and description.
+      description: Persist a newly taught skill with description and ordered steps.
       parameters:
         type: object
         properties:
@@ -124,14 +396,25 @@ tool_description:
 
   - type: function
     function:
+      name: delete_learned_skill
+      description: Forget a previously learned skill.
+      parameters:
+        type: object
+        properties:
+          skill_name: {type: string}
+        required: [skill_name]
+
+  # ---------------- System / pose ----------------
+  - type: function
+    function:
       name: get_system_mode
-      description: Retrieves the currently active operating mode.
+      description: Return the current system mode and map name.
       parameters: {type: object, properties: {}}
 
   - type: function
     function:
       name: set_system_mode
-      description: Sets the rover's operating mode and the active map environment.
+      description: Switch the rover's operating mode and active map.
       parameters:
         type: object
         properties:
@@ -142,7 +425,7 @@ tool_description:
   - type: function
     function:
       name: set_initial_pose
-      description: Sets the initial localization coordinates and heading of the rover on the SLAM map.
+      description: Publish an initial localization pose (resets SLAM localization).
       parameters:
         type: object
         properties:
@@ -153,8 +436,15 @@ tool_description:
 
   - type: function
     function:
+      name: get_robot_pose
+      description: Return the rover's live pose from TF map -> base_link.
+      parameters: {type: object, properties: {}}
+
+  # ---------------- Navigation ----------------
+  - type: function
+    function:
       name: navigate_to_pose
-      description: Commands the rover to navigate to a single specific target location.
+      description: Send a Nav2 NavigateToPose goal to a specific (x, y, yaw).
       parameters:
         type: object
         properties:
@@ -166,7 +456,7 @@ tool_description:
   - type: function
     function:
       name: follow_waypoints
-      description: Commands the rover to follow a sequential array of target coordinates.
+      description: Send a Nav2 FollowWaypoints goal with an ordered list of poses.
       parameters:
         type: object
         properties:
@@ -184,20 +474,176 @@ tool_description:
   - type: function
     function:
       name: abort_mission
-      description: Immediately aborts the current navigation mission and stops the rover.
+      description: Cancel all active Nav2 goals and stop the rover immediately.
       parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: stop_all
+      description: Alias for abort_mission; emergency stop.
+      parameters: {type: object, properties: {}}
+
+  # ---------------- Motion primitives ----------------
+  - type: function
+    function:
+      name: move_relative
+      description: Move relative to the CURRENT pose (forward/right meters and yaw delta).
+      parameters:
+        type: object
+        properties:
+          forward_m: {type: number}
+          right_m: {type: number}
+          yaw_delta_deg: {type: number}
+
+  - type: function
+    function:
+      name: move_forward
+      description: Drive straight forward by N meters from the current pose.
+      parameters:
+        type: object
+        properties:
+          distance_m: {type: number}
+        required: [distance_m]
+
+  - type: function
+    function:
+      name: move_backward
+      description: Reverse by N meters from the current pose.
+      parameters:
+        type: object
+        properties:
+          distance_m: {type: number}
+        required: [distance_m]
+
+  - type: function
+    function:
+      name: strafe_left
+      description: Strafe left by N meters (body-frame translation).
+      parameters:
+        type: object
+        properties:
+          distance_m: {type: number}
+        required: [distance_m]
+
+  - type: function
+    function:
+      name: strafe_right
+      description: Strafe right by N meters (body-frame translation).
+      parameters:
+        type: object
+        properties:
+          distance_m: {type: number}
+        required: [distance_m]
+
+  - type: function
+    function:
+      name: rotate_in_place
+      description: Rotate in place by a signed yaw delta (+ counter-clockwise).
+      parameters:
+        type: object
+        properties:
+          yaw_delta_deg: {type: number}
+        required: [yaw_delta_deg]
+
+  - type: function
+    function:
+      name: turn_left
+      description: Rotate counter-clockwise by the given degrees (default 90).
+      parameters:
+        type: object
+        properties:
+          angle_deg: {type: number}
+
+  - type: function
+    function:
+      name: turn_right
+      description: Rotate clockwise by the given degrees (default 90).
+      parameters:
+        type: object
+        properties:
+          angle_deg: {type: number}
+
+  # ---------------- Maps ----------------
+  - type: function
+    function:
+      name: list_maps
+      description: List map names available on the backend.
+      parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: get_map_info
+      description: Return YAML and image file paths for a named map.
+      parameters:
+        type: object
+        properties:
+          map_name: {type: string}
+        required: [map_name]
+
+  - type: function
+    function:
+      name: map_exists
+      description: Return whether a map name already exists on disk.
+      parameters:
+        type: object
+        properties:
+          map_name: {type: string}
+        required: [map_name]
 
   - type: function
     function:
       name: save_map
-      description: Triggers a download of current SLAM map packaged into a .zip.
+      description: Trigger a download of an existing map as a .zip archive.
       parameters:
         type: object
         properties:
           name: {type: string}
+        required: [name]
 
   - type: function
     function:
-      name: get_robot_pose
-      description: Retrieve the rover's current physical position and heading.
+      name: save_map_to_disk
+      description: Upload a PGM (+ optional YAML) to persist a new map on disk.
+      parameters:
+        type: object
+        properties:
+          name: {type: string}
+          pgm_bytes: {type: string, description: "Base64/bytes of the PGM image."}
+          yaml_bytes: {type: string, description: "Optional YAML map metadata."}
+          overwrite: {type: boolean}
+        required: [name, pgm_bytes]
+
+  - type: function
+    function:
+      name: load_map
+      description: Upload a PGM (+ optional YAML) into the maps folder.
+      parameters:
+        type: object
+        properties:
+          name: {type: string}
+          pgm_bytes: {type: string}
+          yaml_bytes: {type: string}
+          overwrite: {type: boolean}
+        required: [name, pgm_bytes]
+
+  # ---------------- Diagnostics ----------------
+  - type: function
+    function:
+      name: describe_rover_state
+      description: Aggregate pose, mode, home, checkpoints, routes, and skills.
       parameters: {type: object, properties: {}}
+
+  - type: function
+    function:
+      name: compute_pose_offset
+      description: Pure math helper — compute a new pose from a relative motion.
+      parameters:
+        type: object
+        properties:
+          x: {type: number}
+          y: {type: number}
+          yaw_deg: {type: number}
+          forward_m: {type: number}
+          right_m: {type: number}
+          yaw_delta_deg: {type: number}
+        required: [x, y, yaw_deg]
