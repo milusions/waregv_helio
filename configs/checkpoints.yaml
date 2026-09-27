@@ -7,3 +7,7 @@ checkpoints:
     x: 0.0
     y: 0.4
     yaw_degree: 40.0
+  "\u0938\u094D\u091F\u094B\u0930\u0947\u091C":
+    x: -0.04
+    y: -0.03
+    yaw_deg: 0.24
