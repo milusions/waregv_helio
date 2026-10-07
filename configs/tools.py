@@ -75,10 +75,11 @@ def _api(
     path: str,
     payload: Optional[dict] = None,
     params: Optional[dict] = None,
+    timeout: int = 15,
 ) -> Any:
     config = _load_yaml(CONFIG_PATH)
     base = config.get("rest_base_url", "http://localhost:8000").rstrip("/")
-    raw = call_rest_api(base + path, method, payload, params)
+    raw = call_rest_api(base + path, method, payload, params, timeout=timeout)
     try:
         return json.loads(raw)
     except Exception:
@@ -117,14 +118,9 @@ def compute_pose_offset(
     forward_m      : move forward along current heading (+x of body)
     right_m        : move to the robot's right (+y of body)
     yaw_delta_deg  : rotate in place (positive = counter-clockwise)
-
-    This is exactly what the LLM should use to teach / execute
-    directives such as "move forward by 1 meter" or
-    "go half a meter to the left and turn 90 degrees".
     """
     yaw_rad = math.radians(yaw_deg)
 
-    # Rotation matrix from body frame to map frame.
     cos_y = math.cos(yaw_rad)
     sin_y = math.sin(yaw_rad)
 
@@ -361,11 +357,33 @@ def set_initial_pose(x: float, y: float, yaw_deg: float = 0.0) -> Any:
 
 
 def navigate_to_pose(x: float, y: float, yaw_deg: float = 0.0) -> Any:
+    """
+    Dispatch a Nav2 goal. Returns IMMEDIATELY with:
+        {"ok": true, "status": "dispatched", "goal_id": "..."}
+    The rover keeps moving in the background. Poll with get_goal_status().
+    """
     return _api_safe(_api("POST", "/navigate_to_pose", {"x": x, "y": y, "yaw_deg": yaw_deg}))
 
 
 def follow_waypoints(waypoints: List[dict]) -> Any:
+    """
+    Dispatch a FollowWaypoints goal. Returns IMMEDIATELY with a goal_id.
+    """
     return _api_safe(_api("POST", "/follow_waypoints", {"waypoints": waypoints}))
+
+
+def get_goal_status(goal_id: str) -> Any:
+    """
+    Poll the state of a previously dispatched goal.
+    States: dispatched | executing | succeeded | failed | canceled |
+            aborted | rejected.
+    """
+    return _api_safe(_api("GET", f"/goal/{goal_id}"))
+
+
+def list_goals() -> Any:
+    """Return all active + recent goals with their states."""
+    return _api_safe(_api("GET", "/goals"))
 
 
 def abort_mission() -> Any:
@@ -375,9 +393,7 @@ def abort_mission() -> Any:
 def save_map(name: str = "map") -> Any:
     """
     Trigger a download of an existing map as a .zip.
-    Returns the raw streaming response as text (base64/binary) if needed.
-    For agent use, prefer calling this through the UI; here it returns
-    a status descriptor.
+    Returns a status descriptor; the actual binary is served via the UI.
     """
     try:
         config = _load_yaml(CONFIG_PATH)
@@ -472,7 +488,7 @@ def get_robot_pose() -> Any:
 
 
 # =========================================================
-# High-level motion primitives (used when teaching the AI)
+# High-level motion primitives
 # =========================================================
 def move_relative(
     forward_m: float = 0.0,
@@ -486,9 +502,7 @@ def move_relative(
     right_m       : + is right,   - is left     (meters)
     yaw_delta_deg : + is counter-clockwise      (degrees)
 
-    This is the primitive the agent should use for commands like
-    "move forward one meter", "back up half a meter",
-    "turn 90 degrees to the left", or "shift one meter to the right".
+    Returns the SAME shape as navigate_to_pose: a goal_id + status.
     """
     pose = _get_robot_pose_dict()
     if pose is None:
@@ -543,8 +557,8 @@ def turn_right(angle_deg: float = 90.0) -> Any:
 # =========================================================
 def describe_rover_state() -> Any:
     """
-    Aggregate read-only status: pose, mode, home, number of checkpoints,
-    routes, and learned skills. Useful for the LLM to ground itself.
+    Aggregate read-only status: pose, mode, home, checkpoints,
+    routes, learned skills, and currently active goals.
     """
     return {
         "pose": get_robot_pose(),
@@ -553,6 +567,7 @@ def describe_rover_state() -> Any:
         "checkpoints": list(get_checkpoints().keys()),
         "routes": list(get_waypoint_routes().keys()),
         "skills": list(get_learned_skills().keys()),
+        "goals": list_goals(),
     }
 
 
@@ -598,9 +613,11 @@ def handle_tool(func_name: str, args: Optional[dict] = None):
         "set_initial_pose": set_initial_pose,
         "get_robot_pose": get_robot_pose,
 
-        # --- Navigation ---
+        # --- Navigation (non-blocking) ---
         "navigate_to_pose": navigate_to_pose,
         "follow_waypoints": follow_waypoints,
+        "get_goal_status": get_goal_status,
+        "list_goals": list_goals,
         "abort_mission": abort_mission,
         "stop_all": stop_all,
 

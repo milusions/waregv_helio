@@ -23,14 +23,62 @@ agent_instructions: |
      conversationally, summarize state and results.
 
   ==========================================================
+  NAVIGATION IS ASYNCHRONOUS — READ THIS FIRST
+  ==========================================================
+  N1. navigate_to_pose, follow_waypoints, and every motion primitive
+      (move_forward, turn_left, move_relative, …) return IMMEDIATELY.
+      They do NOT wait for the rover to arrive.
+
+      The response shape is:
+          { "ok": true, "status": "dispatched", "goal_id": "abc123…" }
+
+      There is no "completed" field. "dispatched" means the rover has
+      ACCEPTED the goal and is now moving. It does NOT mean it arrived.
+
+  N2. After dispatching, tell the user the goal was accepted. Example:
+          "On my way — heading to the kitchen now."
+      Do NOT say "I have arrived" — you have not arrived yet.
+
+  N3. To check progress, call get_goal_status(goal_id). The state field
+      will be one of:
+          "dispatched"  — sent, not yet accepted by Nav2
+          "executing"   — rover is moving toward the goal
+          "succeeded"   — arrived successfully
+          "canceled"    — was cancelled by abort
+          "aborted"     — Nav2 aborted (blocked, no path, etc.)
+          "failed"      — action-level failure
+          "rejected"    — Nav2 refused the goal
+
+  N4. Polling cadence: only call get_goal_status if the user asks for
+      progress, or if you are checking whether a prior goal is still
+      active before dispatching a new one. Do NOT poll in a tight loop.
+
+  N5. When the user says "are you there yet?", "did you make it?", or
+      similar, call get_goal_status on the last goal_id you dispatched
+      and report the answer in plain language.
+
+  N6. When the state becomes "succeeded", confirm arrival:
+          "I've arrived at the kitchen."
+      When the state becomes "aborted" or "failed", apologize and offer
+      to try again or pick a different target.
+
+  N7. NEVER call navigate_to_pose in a loop to "wait" for arrival.
+      That spawns conflicting goals. Dispatch once, then poll.
+
+  N8. If the user dispatches a second navigation while the first is
+      still running, the new goal will be sent on the same Nav2 action
+      server — typically the first is preempted. Confirm with the user
+      before replacing an active goal.
+
+  ==========================================================
   CHECKPOINTS & LOCATIONS
   ==========================================================
   5. "Remember this place / this is the kitchen / save this spot":
        → call set_checkpoint_here(label="kitchen").
   6. "Go to the kitchen" (saved checkpoint):
-       → call navigate_to_checkpoint(label="kitchen").
+       → call navigate_to_checkpoint(label="kitchen") — returns a goal_id.
   7. "Go to (x, y) facing 90 degrees":
-       → call navigate_to_pose(x, y, yaw_deg).
+       → call navigate_to_pose(x, y, yaw_deg) — returns a goal_id.
   8. "What places do you know?" → get_checkpoints().
   9. "Forget the kitchen" → confirm, then delete_checkpoint("kitchen").
 
@@ -40,7 +88,7 @@ agent_instructions: |
   10. "This is home / set home here":
         → set_home_here().
   11. "Go home / return home / come back":
-        → return_to_home().
+        → return_to_home() — returns a goal_id.
   12. If the user says "go home" but no home has been set, tell them and
       offer to set the current pose as home.
 
@@ -58,8 +106,8 @@ agent_instructions: |
         → call move_relative(forward_m=2.0, right_m=1.0, yaw_delta_deg=30)
       or chain the primitives.
   NOTE: these primitives internally fetch the live pose, apply a rigid-body
-  transform, and dispatch NavigateToPose. You do not need to compute
-  coordinates yourself.
+  transform, and dispatch NavigateToPose. They also return a goal_id — the
+  same non-blocking rules from section N apply.
 
   ==========================================================
   WAYPOINT ROUTES
@@ -76,41 +124,43 @@ agent_instructions: |
   ==========================================================
   MISSION CONTROL
   ==========================================================
-  23. "Stop / abort / cancel / halt" → abort_mission() (this is immediate).
-  24. After aborting, confirm to the user that the rover has stopped.
+  23. "Stop / abort / cancel / halt" → abort_mission() (immediate).
+  24. After aborting, confirm: "Stopped. All active goals cancelled."
+  25. "What's running right now?" → list_goals() and describe the
+      active entries in plain language.
 
   ==========================================================
   SYSTEM MODE & LOCALIZATION
   ==========================================================
-  25. "Switch to mapping mode on map X" →
+  26. "Switch to mapping mode on map X" →
         set_system_mode(mode="mapping", map_name="X").
-  26. "What mode are you in?" → get_system_mode().
-  27. "Set my initial pose to (x, y, yaw)" →
+  27. "What mode are you in?" → get_system_mode().
+  28. "Set my initial pose to (x, y, yaw)" →
         set_initial_pose(x, y, yaw_deg). Only do this when the user
       explicitly asks; it resets localization.
 
   ==========================================================
   MAPS
   ==========================================================
-  28. "List maps" → list_maps().
-  29. "Does map X exist?" → map_exists("X").
-  30. "Download map X" → save_map("X"). (Streams a zip through the UI.)
-  31. "Save the current map as X" →
+  29. "List maps" → list_maps().
+  30. "Does map X exist?" → map_exists("X").
+  31. "Download map X" → save_map("X"). (Streams a zip through the UI.)
+  32. "Save the current map as X" →
         - Check map_exists("X"); if yes, ask before overwriting.
         - Then save_map_to_disk(name="X", pgm_bytes=..., yaml_bytes=...,
-          overwrite=...). You will usually receive the PGM/YAML bytes
-          from the UI side; if the user is only talking, confirm and let
-          the UI perform the upload.
-  32. "Load a map from a file" → load_map(name=..., pgm_bytes=...,
+          overwrite=...). The PGM/YAML bytes usually come from the UI
+          side; if the user is only talking, confirm and let the UI
+          perform the upload.
+  33. "Load a map from a file" → load_map(name=..., pgm_bytes=...,
         yaml_bytes=..., overwrite=...).
 
   ==========================================================
   ONLINE LEARNING (teaching new errands)
   ==========================================================
-  33. Whenever the user asks you to run an errand, routine, or task,
+  34. Whenever the user asks you to run an errand, routine, or task,
       ALWAYS start with get_learned_skills() to see if you already know it.
-  34. If you know the skill, execute its stored steps.
-  35. If you DO NOT know how to run the requested errand:
+  35. If you know the skill, execute its stored steps.
+  36. If you DO NOT know how to run the requested errand:
         a. Say clearly: "I do not know how to run that errand yet."
         b. Ask the user to teach you step-by-step.
         c. Track every detail across turns in the conversation history.
@@ -122,31 +172,34 @@ agent_instructions: |
            concrete steps that reference the rover's tools
            (e.g. "Call move_forward(1.0)", "Call turn_left(90)",
            "Call navigate_to_checkpoint('kitchen')").
-  36. Example lesson the user may teach — moving forward one meter:
+  37. Example lesson the user may teach — moving forward one meter:
         Step 1: Call get_robot_pose() to read (x, y, yaw_deg).
         Step 2: Compute new_x = x + cos(yaw_rad) * 1.0,
                           new_y = y + sin(yaw_rad) * 1.0.
         Step 3: Call navigate_to_pose(new_x, new_y, yaw_deg).
-        Step 4: (Optional) re-read pose to confirm arrival.
+        Step 4: (Optional) poll get_goal_status until state == "succeeded".
       In practice, you can simply call move_forward(1.0), which performs
-      exactly this computation.
-  37. "Forget the skill X" → confirm, then delete_learned_skill("X").
+      exactly this computation and returns a goal_id.
+  38. "Forget the skill X" → confirm, then delete_learned_skill("X").
 
   ==========================================================
   DIAGNOSTICS
   ==========================================================
-  38. If you are ever unsure of the rover's overall state,
+  39. If you are ever unsure of the rover's overall state,
       call describe_rover_state() — it returns pose, mode, home,
-      checkpoints, routes, and skills in one shot.
+      checkpoints, routes, skills, AND active goals in one shot.
 
   ==========================================================
   SAFETY
   ==========================================================
-  39. Never move the rover if its pose is unavailable
+  40. Never dispatch a motion goal if the rover's pose is unavailable
       (get_robot_pose returns ok=false). Instead, tell the user that
       localization is not ready and suggest set_initial_pose.
-  40. For any motion that could collide (short distances, near obstacles),
+  41. For any motion that could collide (short distances, near obstacles),
       confirm intent with the user before dispatching.
+  42. If the user is in the middle of giving multi-step instructions and
+      a previous goal is still executing, either wait, poll for success,
+      or ask the user whether to preempt the active goal.
 
 apis:
   - name: SET SYSTEM MODE
@@ -170,19 +223,43 @@ apis:
     input_format: '{"x": float, "y": float, "yaw_deg": float}'
     output_format: '{"ok": boolean, "pose_source": "tf:map->base_link"}'
 
-  - name: NAVIGATE TO POSE
-    purpose: Commands the rover to navigate to a single target pose.
+  - name: NAVIGATE TO POSE (async)
+    purpose: >
+      Dispatches a Nav2 NavigateToPose goal and returns IMMEDIATELY with
+      a goal_id. The rover continues moving in the background. Poll
+      GET /goal/{goal_id} to check progress.
     url: /navigate_to_pose
     method: POST
     input_format: '{"x": float, "y": float, "yaw_deg": float}'
-    output_format: '{"ok": boolean, "status": "dispatched"}'
+    output_format: '{"ok": boolean, "status": "dispatched", "goal_id": "string"}'
 
-  - name: FOLLOW WAYPOINTS
-    purpose: Commands the rover to follow a sequential list of poses.
+  - name: FOLLOW WAYPOINTS (async)
+    purpose: >
+      Dispatches a Nav2 FollowWaypoints goal and returns IMMEDIATELY with
+      a goal_id. Poll GET /goal/{goal_id} to check progress.
     url: /follow_waypoints
     method: POST
     input_format: '{"waypoints": [{"x": float, "y": float, "yaw_deg": float}, ...]}'
-    output_format: '{"ok": boolean, "count": int, "status": "dispatched"}'
+    output_format: '{"ok": boolean, "status": "dispatched", "goal_id": "string", "count": int}'
+
+  - name: GET GOAL STATUS
+    purpose: >
+      Returns the current state of a dispatched goal. State is one of:
+      dispatched, executing, succeeded, canceled, aborted, failed, rejected.
+    url: /goal/{goal_id}
+    method: GET
+    input_format: '{}'
+    output_format: >
+      {"ok": boolean, "goal_id": "string", "status": "string",
+       "created_at": float, "updated_at": float,
+       "message": "string|null", "result": object|null, "request": object}
+
+  - name: LIST GOALS
+    purpose: Returns all active and recently finished goals.
+    url: /goals
+    method: GET
+    input_format: '{}'
+    output_format: '{"ok": boolean, "active": [...], "recent": [...]}'
 
   - name: ABORT MISSION
     purpose: Cancels every active Nav2 goal and stops the rover.
@@ -298,7 +375,9 @@ tool_description:
   - type: function
     function:
       name: navigate_to_checkpoint
-      description: Navigate to a saved checkpoint by label.
+      description: >
+        Dispatch a navigation goal to a saved checkpoint by label.
+        Returns IMMEDIATELY with a goal_id. Use get_goal_status to poll.
       parameters:
         type: object
         properties:
@@ -324,7 +403,9 @@ tool_description:
   - type: function
     function:
       name: return_to_home
-      description: Navigate the rover back to the stored home position.
+      description: >
+        Dispatch a navigation goal to the stored home position.
+        Returns IMMEDIATELY with a goal_id.
       parameters: {type: object, properties: {}}
 
   # ---------------- Waypoint routes ----------------
@@ -366,7 +447,9 @@ tool_description:
   - type: function
     function:
       name: follow_saved_route
-      description: Execute a previously saved named waypoint route.
+      description: >
+        Execute a previously saved named waypoint route.
+        Returns IMMEDIATELY with a goal_id.
       parameters:
         type: object
         properties:
@@ -444,7 +527,10 @@ tool_description:
   - type: function
     function:
       name: navigate_to_pose
-      description: Send a Nav2 NavigateToPose goal to a specific (x, y, yaw).
+      description: >
+        Dispatch a Nav2 NavigateToPose goal. Returns IMMEDIATELY with a
+        goal_id and status="dispatched". The rover continues moving in
+        the background. Poll get_goal_status(goal_id) for progress.
       parameters:
         type: object
         properties:
@@ -456,7 +542,9 @@ tool_description:
   - type: function
     function:
       name: follow_waypoints
-      description: Send a Nav2 FollowWaypoints goal with an ordered list of poses.
+      description: >
+        Dispatch a Nav2 FollowWaypoints goal with an ordered list of poses.
+        Returns IMMEDIATELY with a goal_id.
       parameters:
         type: object
         properties:
@@ -470,6 +558,25 @@ tool_description:
                 yaw_deg: {type: number}
               required: [x, y]
         required: [waypoints]
+
+  - type: function
+    function:
+      name: get_goal_status
+      description: >
+        Poll the status of a dispatched goal. State is one of:
+        dispatched, executing, succeeded, canceled, aborted, failed,
+        rejected. Use this instead of blocking on navigate_to_pose.
+      parameters:
+        type: object
+        properties:
+          goal_id: {type: string}
+        required: [goal_id]
+
+  - type: function
+    function:
+      name: list_goals
+      description: Return all active and recently finished goals.
+      parameters: {type: object, properties: {}}
 
   - type: function
     function:
@@ -487,7 +594,9 @@ tool_description:
   - type: function
     function:
       name: move_relative
-      description: Move relative to the CURRENT pose (forward/right meters and yaw delta).
+      description: >
+        Move relative to the CURRENT pose (forward/right meters and yaw
+        delta). Returns IMMEDIATELY with a goal_id.
       parameters:
         type: object
         properties:
@@ -498,7 +607,7 @@ tool_description:
   - type: function
     function:
       name: move_forward
-      description: Drive straight forward by N meters from the current pose.
+      description: Drive straight forward by N meters. Returns a goal_id.
       parameters:
         type: object
         properties:
@@ -508,7 +617,7 @@ tool_description:
   - type: function
     function:
       name: move_backward
-      description: Reverse by N meters from the current pose.
+      description: Reverse by N meters. Returns a goal_id.
       parameters:
         type: object
         properties:
@@ -518,7 +627,7 @@ tool_description:
   - type: function
     function:
       name: strafe_left
-      description: Strafe left by N meters (body-frame translation).
+      description: Strafe left by N meters. Returns a goal_id.
       parameters:
         type: object
         properties:
@@ -528,7 +637,7 @@ tool_description:
   - type: function
     function:
       name: strafe_right
-      description: Strafe right by N meters (body-frame translation).
+      description: Strafe right by N meters. Returns a goal_id.
       parameters:
         type: object
         properties:
@@ -538,7 +647,7 @@ tool_description:
   - type: function
     function:
       name: rotate_in_place
-      description: Rotate in place by a signed yaw delta (+ counter-clockwise).
+      description: Rotate in place by a signed yaw delta. Returns a goal_id.
       parameters:
         type: object
         properties:
@@ -630,7 +739,9 @@ tool_description:
   - type: function
     function:
       name: describe_rover_state
-      description: Aggregate pose, mode, home, checkpoints, routes, and skills.
+      description: >
+        Aggregate pose, mode, home, checkpoints, routes, skills, and
+        currently active goals.
       parameters: {type: object, properties: {}}
 
   - type: function
